@@ -1,0 +1,1609 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>自動畫圖機</title>
+<meta name="description" content="讓程式一筆一筆替你作畫：六種生成藝術演算法，種子化重現、可下載 PNG、匿名作品集。" />
+<style>
+  /* ---------- 設計 token（與主專案 index.css 同一組深色工作室配色） ---------- */
+  :root {
+    --background: 250 14% 6%;
+    --foreground: 250 20% 97%;
+    --card: 250 14% 9%;
+    --primary: 263 85% 70%;
+    --primary-foreground: 250 40% 8%;
+    --secondary: 250 12% 16%;
+    --muted: 250 12% 14%;
+    --muted-foreground: 250 12% 64%;
+    --accent: 250 14% 18%;
+    --destructive: 0 72% 58%;
+    --border: 250 12% 19%;
+    --radius: 0.75rem;
+    --gradient-primary: linear-gradient(135deg, hsl(263 85% 70%), hsl(190 90% 62%));
+    --gradient-stage: radial-gradient(120% 85% at 50% -10%, hsl(263 70% 26% / 0.55), transparent 68%);
+    --glow-soft: 0 12px 34px -18px hsl(263 85% 70% / 0.45);
+    --shadow-stage: 0 44px 120px -55px hsl(250 60% 3% / 0.95);
+    --ease: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+    --sans: Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; border-color: hsl(var(--border)); }
+  html, body { margin: 0; padding: 0; min-height: 100%; }
+  body {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { position: relative; display: flex; min-height: 100vh; flex-direction: column; }
+  .stage-glow-bg {
+    pointer-events: none;
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 460px;
+    background-image: var(--gradient-stage);
+  }
+
+  /* ---------- 頂部列 ---------- */
+  header {
+    position: relative;
+    z-index: 10;
+    border-bottom: 1px solid hsl(var(--border) / 0.7);
+    padding: 14px 20px;
+  }
+  @media (min-width: 1024px) { header { padding: 14px 32px; } }
+  .header-inner {
+    margin: 0 auto;
+    display: flex;
+    width: 100%;
+    max-width: 1600px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-icon {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    background-image: var(--gradient-primary);
+    color: hsl(var(--primary-foreground));
+    box-shadow: var(--glow-soft);
+  }
+  .brand-icon svg { width: 18px; height: 18px; }
+  .brand-name { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .brand-tag { margin: 2px 0 0; font-size: 11px; color: hsl(var(--muted-foreground)); }
+  @media (max-width: 639px) { .brand-tag { display: none; } }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .chip {
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--card) / 0.6);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--muted-foreground));
+    white-space: nowrap;
+  }
+
+  /* ---------- 版面 ---------- */
+  main {
+    position: relative;
+    z-index: 10;
+    margin: 0 auto;
+    display: flex;
+    width: 100%;
+    max-width: 1600px;
+    flex: 1;
+    flex-direction: column;
+    gap: 24px;
+    padding: 24px 20px;
+  }
+  @media (min-width: 1024px) {
+    main { flex-direction: row; gap: 32px; padding: 32px; }
+  }
+  .stage-column { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 16px; }
+
+  /* 控制面板：桌機為側欄，行動版收進底部抽屜（同一份 DOM，靠 CSS 切換） */
+  .panel-wrap {
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--card) / 0.4);
+    border-radius: 16px;
+    padding: 16px;
+  }
+  @media (min-width: 1024px) {
+    .panel-wrap {
+      position: sticky;
+      top: 32px;
+      width: 312px;
+      flex: none;
+      max-height: calc(100vh - 4rem);
+      overflow-y: auto;
+    }
+  }
+  @media (max-width: 1023px) {
+    .panel-wrap {
+      position: fixed;
+      z-index: 60;
+      inset: auto 0 0 0;
+      max-height: 86vh;
+      overflow-y: auto;
+      border-radius: 20px 20px 0 0;
+      background: hsl(var(--card));
+      transform: translateY(105%);
+      visibility: hidden;
+      transition: transform var(--ease), visibility var(--ease);
+      box-shadow: var(--shadow-stage);
+    }
+    .panel-wrap.open { transform: none; visibility: visible; }
+    #scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 55;
+      background: hsl(250 30% 3% / 0.7);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--ease);
+    }
+    #scrim.open { opacity: 1; pointer-events: auto; }
+  }
+  @media (min-width: 1024px) {
+    #scrim { display: none; }
+    #settingsButton { display: none; }
+  }
+
+  /* ---------- 控制項 ---------- */
+  .section { margin-bottom: 24px; }
+  .section:last-child { margin-bottom: 0; }
+  .section-title {
+    margin: 0 0 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+  .seg { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seg.quad { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 10px;
+    background: hsl(var(--card) / 0.4);
+    color: hsl(var(--muted-foreground));
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: all var(--ease);
+  }
+  .seg-item svg { width: 16px; height: 16px; flex: none; color: hsl(var(--primary)); }
+  .seg-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .seg-item:hover { border-color: hsl(var(--border)); background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+  .seg-item.is-active {
+    border-color: hsl(var(--primary) / 0.6);
+    background: hsl(var(--primary) / 0.1);
+    color: hsl(var(--foreground));
+    box-shadow: var(--glow-soft);
+  }
+  .seg-item.col { flex-direction: column; gap: 6px; padding: 8px 4px; font-size: 11px; }
+  .ratio-box {
+    width: 100%;
+    max-width: 26px;
+    aspect-ratio: var(--r);
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    opacity: 0.7;
+  }
+  .swatch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 10px;
+    background: hsl(var(--card) / 0.4);
+    color: hsl(var(--muted-foreground));
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--ease);
+  }
+  .chip-btn:hover { border-color: hsl(var(--border)); background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+  .chip-btn.is-active {
+    border-color: hsl(var(--primary) / 0.6);
+    background: hsl(var(--primary) / 0.1);
+    color: hsl(var(--foreground));
+    box-shadow: var(--glow-soft);
+  }
+  .dot { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 1px hsl(var(--border)); flex: none; }
+  .swatch-dots { display: flex; flex: none; }
+  .swatch-dots span { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 1px hsl(var(--background)); }
+  .swatch-dots span + span { margin-left: -4px; }
+
+  .slider-row { margin-bottom: 20px; }
+  .slider-row:last-child { margin-bottom: 0; }
+  .slider-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .slider-label { font-size: 12px; font-weight: 500; color: hsl(var(--muted-foreground)); }
+  .slider-value { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    margin: 0;
+    border-radius: 999px;
+    background: hsl(var(--secondary));
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: hsl(var(--background));
+    border: 2px solid hsl(var(--primary));
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: hsl(var(--background));
+    border: 2px solid hsl(var(--primary));
+    cursor: pointer;
+  }
+  input[type="range"]:focus-visible { box-shadow: 0 0 0 3px hsl(var(--primary) / 0.35); }
+  .field-label { display: block; font-size: 12px; font-weight: 500; color: hsl(var(--muted-foreground)); margin-bottom: 8px; }
+  .field-row { display: flex; align-items: center; gap: 8px; }
+  input[type="text"] {
+    height: 36px;
+    flex: 1;
+    min-width: 0;
+    border: 1px solid hsl(var(--border));
+    border-radius: 10px;
+    background: hsl(var(--card) / 0.6);
+    color: hsl(var(--foreground));
+    font-family: var(--mono);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    padding: 0 12px;
+  }
+  input[type="text"]:focus-visible { outline: none; box-shadow: 0 0 0 3px hsl(var(--primary) / 0.35); }
+
+  .switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 10px;
+    background: hsl(var(--card) / 0.4);
+    padding: 10px 12px;
+  }
+  .switch-row p { margin: 0; }
+  .switch-title { font-size: 12px; font-weight: 500; }
+  .switch-hint { margin-top: 2px !important; font-size: 11px; color: hsl(var(--muted-foreground)); }
+  .switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    flex: none;
+    border: none;
+    border-radius: 999px;
+    background: hsl(var(--secondary));
+    cursor: pointer;
+    transition: background var(--ease);
+    padding: 0;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: hsl(var(--background));
+    transition: transform var(--ease);
+  }
+  .switch[aria-checked="true"] { background: hsl(var(--primary)); }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); }
+
+  /* ---------- 按鈕 ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: hsl(var(--foreground));
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--ease);
+    white-space: nowrap;
+  }
+  .btn svg { width: 16px; height: 16px; flex: none; }
+  .btn-primary { background-image: var(--gradient-primary); color: hsl(var(--primary-foreground)); box-shadow: var(--glow-soft); }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-outline { border-color: hsl(var(--border)); background: hsl(var(--card) / 0.4); }
+  .btn-outline:hover { background: hsl(var(--accent)); }
+  .btn-ghost { color: hsl(var(--muted-foreground)); }
+  .btn-ghost:hover { background: hsl(var(--accent)); color: hsl(var(--foreground)); }
+  .btn-icon { width: 36px; padding: 0; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+  .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px hsl(var(--primary) / 0.35); }
+  @media (max-width: 639px) { .hide-sm { display: none; } }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  .frame {
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--card) / 0.3);
+    border-radius: 16px;
+    padding: 10px;
+    box-shadow: var(--shadow-stage);
+  }
+  @media (min-width: 640px) { .frame { padding: 12px; } }
+  .frame-inner { overflow: hidden; border: 1px solid hsl(var(--border) / 0.6); border-radius: 12px; }
+  #stageWrap {
+    position: relative;
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: hsl(var(--background));
+  }
+  #stageWrap:fullscreen { background: hsl(var(--background)); }
+  #stage { display: block; max-width: 100%; max-height: 100%; }
+
+  .status { display: flex; flex-direction: column; gap: 8px; }
+  .status-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: hsl(var(--muted-foreground));
+  }
+  .status-left { display: inline-flex; align-items: center; gap: 8px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--muted-foreground)); }
+  .status-dot.active { background: hsl(var(--primary)); }
+  .status-dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+  .status-label { font-weight: 500; color: hsl(var(--foreground)); }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 6px; width: 100%; overflow: hidden; border-radius: 999px; background: hsl(var(--secondary)); }
+  .bar { height: 100%; width: 0; border-radius: 999px; background-image: var(--gradient-primary); transition: width 200ms var(--ease); }
+
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid hsl(var(--destructive) / 0.4);
+    background: hsl(var(--destructive) / 0.1);
+    color: hsl(var(--destructive));
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .notice svg { width: 16px; height: 16px; flex: none; }
+  .notice[hidden] { display: none; }
+
+  /* ---------- 作品集 ---------- */
+  .gallery { position: relative; z-index: 10; border-top: 1px solid hsl(var(--border) / 0.7); padding: 24px 20px; }
+  @media (min-width: 1024px) { .gallery { padding: 24px 32px; } }
+  .gallery-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .gallery-title { display: flex; align-items: center; gap: 10px; }
+  .gallery-icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 10px;
+    background: hsl(var(--card) / 0.6);
+    color: hsl(var(--primary));
+  }
+  .gallery-icon svg { width: 16px; height: 16px; }
+  .gallery-name { margin: 0; font-size: 14px; font-weight: 600; }
+  .gallery-count { margin: 2px 0 0; font-family: var(--mono); font-size: 11px; color: hsl(var(--muted-foreground)); }
+  .gallery-empty {
+    margin: 0;
+    border: 1px dashed hsl(var(--border) / 0.7);
+    background: hsl(var(--card) / 0.3);
+    border-radius: 12px;
+    padding: 32px 16px;
+    text-align: center;
+    font-size: 13px;
+    color: hsl(var(--muted-foreground));
+  }
+  .strip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+  .strip::-webkit-scrollbar { height: 6px; }
+  .strip::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 999px; }
+  .thumb {
+    position: relative;
+    width: 164px;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.7);
+    border-radius: 12px;
+    background: hsl(var(--card) / 0.4);
+    transition: border-color var(--ease);
+  }
+  .thumb:hover { border-color: hsl(var(--primary) / 0.5); }
+  .thumb-open { display: block; width: 100%; padding: 0; border: none; background: none; cursor: pointer; }
+  .thumb-open canvas { display: block; width: 100%; height: 100%; }
+  .thumb-actions {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 18px 8px 8px;
+    background: linear-gradient(to top, hsl(var(--background) / 0.95), transparent);
+    opacity: 0;
+    transition: opacity var(--ease);
+  }
+  .thumb:hover .thumb-actions, .thumb:focus-within .thumb-actions { opacity: 1; }
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: hsl(var(--foreground));
+    cursor: pointer;
+    transition: background var(--ease);
+  }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .icon-btn:hover { background: hsl(var(--accent)); }
+  .icon-btn.danger { color: hsl(var(--destructive)); }
+
+  /* ---------- 提示與對話框 ---------- */
+  #toasts { position: fixed; right: 16px; bottom: 16px; z-index: 90; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .toast {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid hsl(var(--border));
+    border-radius: 12px;
+    background: hsl(var(--card));
+    box-shadow: var(--shadow-stage);
+    padding: 10px 14px;
+    font-size: 13px;
+    animation: toast-in 200ms var(--ease);
+  }
+  .toast svg { width: 16px; height: 16px; flex: none; color: hsl(var(--primary)); }
+  dialog {
+    width: calc(100% - 32px);
+    max-width: 420px;
+    border: 1px solid hsl(var(--border));
+    border-radius: 16px;
+    background: hsl(var(--card));
+    color: hsl(var(--foreground));
+    box-shadow: var(--shadow-stage);
+    padding: 24px;
+  }
+  dialog::backdrop { background: hsl(250 30% 3% / 0.75); }
+  dialog h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+  dialog p { margin: 0 0 20px; font-size: 13px; color: hsl(var(--muted-foreground)); }
+  .dialog-actions { display: flex; flex-direction: column-reverse; gap: 8px; }
+  @media (min-width: 640px) { .dialog-actions { flex-direction: row; justify-content: flex-end; } }
+  .btn-destructive { background: hsl(var(--destructive)); color: hsl(0 20% 98%); }
+  .btn-destructive:hover { background: hsl(var(--destructive) / 0.9); }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="stage-glow-bg"></div>
+
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-icon" data-icon="palette"></span>
+        <div>
+          <p class="brand-name">自動畫圖機</p>
+          <p class="brand-tag">讓程式一筆一筆替你作畫</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="chip" id="seedChip">種子 20261019</span>
+        <button class="btn btn-outline" id="settingsButton" type="button"><span data-icon="sliders"></span>調整設定</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="scrim"></div>
+
+  <main>
+    <aside class="panel-wrap" id="panelWrap" aria-label="調整設定">
+      <div class="section">
+        <h2 class="section-title">繪圖方式</h2>
+        <div class="seg" id="algorithmSeg"></div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">配色</h2>
+        <div class="swatch-grid" id="paletteGrid"></div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">紙張底色</h2>
+        <div class="chip-row" id="backgroundRow"></div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">筆觸調整</h2>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span class="slider-label">筆觸密度</span>
+            <span class="slider-value" id="densityValue">55</span>
+          </div>
+          <input type="range" id="densityInput" min="1" max="100" step="1" value="55" aria-label="筆觸密度" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span class="slider-label">筆觸粗細</span>
+            <span class="slider-value" id="lineWidthValue">1.6</span>
+          </div>
+          <input type="range" id="lineWidthInput" min="0.4" max="6" step="0.1" value="1.6" aria-label="筆觸粗細" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-head">
+            <span class="slider-label">繪製速度</span>
+            <span class="slider-value" id="speedValue">260 筆/秒</span>
+          </div>
+          <input type="range" id="speedInput" min="20" max="1200" step="10" value="260" aria-label="繪製速度" />
+        </div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">畫布</h2>
+        <div class="seg quad" id="aspectSeg" style="margin-bottom: 16px"></div>
+        <label class="field-label" for="seedInput">種子</label>
+        <div class="field-row" style="margin-bottom: 16px">
+          <input type="text" id="seedInput" inputmode="numeric" value="20261019" aria-label="種子" />
+          <button class="btn btn-outline btn-icon" id="diceButton" type="button" aria-label="換一組種子"></button>
+        </div>
+        <div class="switch-row">
+          <div>
+            <p class="switch-title">自動保存</p>
+            <p class="switch-hint">繪製完成後自動存入作品集</p>
+          </div>
+          <button class="switch" id="autoSaveSwitch" type="button" role="switch" aria-checked="true" aria-label="自動保存"></button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="stage-column">
+      <div class="notice" id="backendNotice" hidden></div>
+
+      <div class="toolbar">
+        <button class="btn btn-primary" id="generateButton" type="button"></button>
+        <button class="btn btn-outline btn-icon" id="playButton" type="button" aria-label="暫停"></button>
+        <button class="btn btn-outline btn-icon" id="replayButton" type="button" aria-label="重播"></button>
+        <button class="btn btn-outline" id="downloadButton" type="button" disabled></button>
+        <div class="toolbar-right">
+          <button class="btn btn-ghost" id="surpriseButton" type="button">
+            <span data-icon="shuffle"></span><span class="hide-sm">隨機驚喜</span>
+          </button>
+          <button class="btn btn-ghost btn-icon" id="fullscreenButton" type="button" aria-label="全螢幕"></button>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-inner">
+          <div id="stageWrap"><canvas id="stage" aria-hidden="true"></canvas></div>
+        </div>
+      </div>
+
+      <div class="status">
+        <div class="status-line">
+          <span class="status-left">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-label" id="statusLabel">待命中</span>
+            <span class="mono" id="strokeCount">0 / 0 筆</span>
+          </span>
+          <span class="mono" id="percentText" style="color: hsl(var(--foreground))">0%</span>
+        </div>
+        <div class="track"><div class="bar" id="progressBar"></div></div>
+      </div>
+    </section>
+  </main>
+
+  <section class="gallery" aria-label="我的作品集">
+    <div class="gallery-head">
+      <div class="gallery-title">
+        <span class="gallery-icon" data-icon="images"></span>
+        <div>
+          <h2 class="gallery-name">我的作品集</h2>
+          <p class="gallery-count" id="galleryCount">共 0 件</p>
+        </div>
+      </div>
+      <button class="btn btn-ghost" id="clearButton" type="button" hidden>
+        <span data-icon="trash"></span>清空作品集
+      </button>
+    </div>
+    <p class="gallery-empty" id="galleryEmpty">還沒有作品，按「生成新作」畫出第一張。</p>
+    <div class="strip" id="galleryStrip" hidden></div>
+  </section>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<dialog id="confirmDialog">
+  <h2 id="confirmTitle"></h2>
+  <p id="confirmBody"></p>
+  <div class="dialog-actions">
+    <button class="btn btn-outline" id="confirmCancel" type="button">取消</button>
+    <button class="btn btn-destructive" id="confirmOk" type="button">確定刪除</button>
+  </div>
+</dialog>
+
+<script type="module">
+/* =========================================================================
+   自動畫圖機 — 單檔版
+   · 繪圖引擎與介面完全不需連網，離線（甚至直接用瀏覽器開啟此檔）也能作畫。
+   · 作品集需要網路：啟動後才動態載入 Enter Cloud 用戶端，取得匿名身分，
+     失敗時只顯示提示並停用作品集，不影響繪圖。
+   ========================================================================= */
+
+/* ---------- 種子化亂數（同一個種子永遠產生同一張圖） ---------- */
+const createRng = (seed) => {
+  let state = (Math.abs(Math.floor(seed)) >>> 0) || 1;
+  const next = () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const range = (min, max) => min + next() * (max - min);
+  const int = (min, max) => {
+    const low = Math.ceil(Math.min(min, max));
+    const high = Math.floor(Math.max(min, max));
+    return low + Math.floor(next() * (high - low + 1));
+  };
+  return { next, range, int, pick: (items) => items[int(0, items.length - 1)] };
+};
+const randomSeed = () => Math.floor(Math.random() * 99999999) + 1;
+
+/* ---------- 2D 噪聲（流場筆觸的方向來源） ---------- */
+const hash2 = (x, y, seed) => {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 1442695041);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+const smooth = (t) => t * t * (3 - 2 * t);
+const createNoise2D = (seed) => {
+  const s = Math.abs(Math.floor(seed)) || 1;
+  return (x, y) => {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const v00 = hash2(x0, y0, s);
+    const v10 = hash2(x0 + 1, y0, s);
+    const v01 = hash2(x0, y0 + 1, s);
+    const v11 = hash2(x0 + 1, y0 + 1, s);
+    const top = v00 + (v10 - v00) * tx;
+    const bottom = v01 + (v11 - v01) * tx;
+    return (top + (bottom - top) * ty) * 2 - 1;
+  };
+};
+
+/* ---------- 配色：顏色由「配色 + 紙張亮度」推導，任何配色在任何紙上都看得見 ---------- */
+const PALETTES = [
+  { id: "aurora", label: "極光", hues: [265, 195, 170, 320, 292], saturation: [70, 95], lightnessDark: [58, 80], lightnessLight: [32, 52] },
+  { id: "neon", label: "霓虹夜", hues: [330, 188, 52, 275, 112], saturation: [85, 100], lightnessDark: [56, 74], lightnessLight: [38, 56] },
+  { id: "sunlit", label: "暖陽", hues: [34, 14, 44, 22, 4], saturation: [65, 88], lightnessDark: [56, 76], lightnessLight: [34, 54] },
+  { id: "ink", label: "墨韻", hues: [250, 240, 260, 232, 268], saturation: [4, 12], lightnessDark: [64, 90], lightnessLight: [14, 36] },
+  { id: "forest", label: "森林", hues: [152, 122, 168, 96, 178], saturation: [32, 58], lightnessDark: [48, 70], lightnessLight: [24, 46] },
+  { id: "candy", label: "糖果", hues: [340, 18, 250, 176, 46], saturation: [68, 92], lightnessDark: [62, 82], lightnessLight: [38, 58] },
+];
+const BACKGROUNDS = [
+  { id: "ink", label: "墨黑", color: "#0B0B10", isLight: false },
+  { id: "paper", label: "宣紙白", color: "#F5F0E6", isLight: true },
+  { id: "midnight", label: "深海藍", color: "#0A1730", isLight: false },
+];
+const getPalette = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
+const getBackground = (id) => BACKGROUNDS.find((b) => b.id === id) || BACKGROUNDS[0];
+const midSaturation = (palette) => (palette.saturation[0] + palette.saturation[1]) / 2;
+const paletteColors = (palette, background, count = 8) => {
+  const range = background.isLight ? palette.lightnessLight : palette.lightnessDark;
+  const saturation = midSaturation(palette).toFixed(0);
+  return Array.from({ length: count }, (_, index) => {
+    const hue = palette.hues[index % palette.hues.length];
+    const t = count === 1 ? 0 : index / (count - 1);
+    const lightness = range[0] + (range[1] - range[0]) * t;
+    return `hsl(${hue.toFixed(0)} ${saturation}% ${lightness.toFixed(0)}%)`;
+  });
+};
+const swatchColors = (palette) => {
+  const saturation = midSaturation(palette).toFixed(0);
+  return palette.hues.map((hue) => `hsl(${hue.toFixed(0)} ${saturation}% 60%)`);
+};
+
+/* ---------- 形狀工具 ---------- */
+const splitPoints = (points, chunkSize) => {
+  if (points.length === 0) return [];
+  if (points.length === 1) return [points];
+  const size = Math.max(2, Math.floor(chunkSize));
+  const chunks = [];
+  for (let start = 0; start < points.length - 1; start += size) {
+    chunks.push(points.slice(start, Math.min(start + size + 1, points.length)));
+  }
+  return chunks;
+};
+const rotatePoint = (point, cx, cy, angle) => {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = point.x - cx;
+  const dy = point.y - cy;
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+};
+
+/* ---------- 六種繪圖方式 ---------- */
+const flowField = ({ rng, noise, width, height, density, lineWidth, colors }) => {
+  const strokeCount = Math.round(120 + (density / 100) * 780);
+  const fieldScale = rng.range(1.5, 3.2);
+  const offset = rng.range(-1000, 1000);
+  const step = Math.min(width, height) * 0.006;
+  const strokes = [];
+  for (let i = 0; i < strokeCount; i += 1) {
+    let x = rng.range(0, width);
+    let y = rng.range(0, height);
+    const points = [{ x, y }];
+    const steps = rng.int(40, 170);
+    const wobble = rng.range(0.8, 1.6);
+    for (let s = 0; s < steps; s += 1) {
+      const angle = noise((x / width) * fieldScale + offset, (y / height) * fieldScale + offset) * Math.PI * wobble;
+      x += Math.cos(angle) * step;
+      y += Math.sin(angle) * step;
+      if (x < -step || x > width + step || y < -step || y > height + step) break;
+      points.push({ x, y });
+    }
+    strokes.push({ points, color: colors[rng.int(0, colors.length - 1)], width: lineWidth * rng.range(0.6, 1.6), alpha: 0.5 });
+  }
+  return strokes;
+};
+
+const harmonograph = ({ rng, width, height, density, lineWidth, colors }) => {
+  const curveCount = Math.round(3 + (density / 100) * 9);
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.46;
+  const strokes = [];
+  for (let c = 0; c < curveCount; c += 1) {
+    const freq = [0, 1, 2, 3].map(() => rng.int(1, 6) + rng.range(-0.08, 0.08));
+    const damping = [0, 1, 2, 3].map(() => rng.range(0.0035, 0.009));
+    const phase = [0, 1, 2, 3].map(() => rng.range(0, Math.PI * 2));
+    const spin = rng.range(0, Math.PI * 2);
+    const samples = 1800;
+    const span = rng.range(34, 60);
+    const points = [];
+    for (let i = 0; i <= samples; i += 1) {
+      const t = (i / samples) * span;
+      const x = cx + radius * 0.5 * Math.sin(freq[0] * t + phase[0]) * Math.exp(-damping[0] * t)
+        + radius * 0.5 * Math.sin(freq[1] * t + phase[1]) * Math.exp(-damping[1] * t);
+      const y = cy + radius * 0.5 * Math.sin(freq[2] * t + phase[2]) * Math.exp(-damping[2] * t)
+        + radius * 0.5 * Math.sin(freq[3] * t + phase[3]) * Math.exp(-damping[3] * t);
+      const dx = x - cx;
+      const dy = y - cy;
+      points.push({ x: cx + dx * Math.cos(spin) - dy * Math.sin(spin), y: cy + dx * Math.sin(spin) + dy * Math.cos(spin) });
+    }
+    const color = colors[rng.int(0, colors.length - 1)];
+    splitPoints(points, Math.ceil(samples / rng.int(10, 18))).forEach((chunk) => {
+      strokes.push({ points: chunk, color, width: lineWidth * rng.range(0.5, 1.1), alpha: 0.85 });
+    });
+  }
+  return strokes;
+};
+
+const mandala = ({ rng, width, height, density, lineWidth, colors }) => {
+  const cx = width / 2;
+  const cy = height / 2;
+  const maxRadius = Math.min(width, height) * 0.46;
+  const symmetry = rng.int(6, 14);
+  const rings = Math.round(3 + (density / 100) * 5) + rng.int(0, 1);
+  const strokes = [];
+  for (let ring = 0; ring < rings; ring += 1) {
+    const ringRadius = maxRadius * ((ring + 1) / rings) * rng.range(0.9, 1.05);
+    const petals = rng.int(5, 11);
+    const spread = rng.range(0.18, 0.42);
+    const color = colors[ring % colors.length];
+    for (let petal = 0; petal < petals; petal += 1) {
+      const baseAngle = (petal / petals) * Math.PI * 2 + ring * 0.17;
+      const points = [];
+      for (let s = 0; s <= 26; s += 1) {
+        const t = s / 26;
+        const angle = baseAngle + Math.sin(t * Math.PI) * spread;
+        const localRadius = ringRadius * (0.72 + 0.28 * Math.sin(t * Math.PI));
+        points.push({ x: cx + Math.cos(angle) * localRadius, y: cy + Math.sin(angle) * localRadius });
+      }
+      for (let k = 0; k < symmetry; k += 1) {
+        const angle = (k / symmetry) * Math.PI * 2;
+        const rotated = points.map((point) => rotatePoint(point, cx, cy, angle));
+        strokes.push({ points: splitPoints(rotated, 14)[0] || rotated, color: colors[(ring + k) % colors.length], width: lineWidth * rng.range(0.5, 1.2), alpha: 0.75 });
+      }
+    }
+    strokes.push({ points: circlePoints(cx, cy, ringRadius, 96), color, width: lineWidth * 0.6, alpha: 0.4 });
+  }
+  return strokes;
+};
+const circlePoints = (cx, cy, radius, segments) =>
+  Array.from({ length: segments + 1 }, (_, index) => {
+    const angle = (index / segments) * Math.PI * 2;
+    return { x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius };
+  });
+
+const fractalTree = ({ rng, width, height, density, lineWidth, colors }) => {
+  const strokes = [];
+  const MAX = 4000;
+  const depth = Math.min(11, rng.int(5, 7) + Math.round(density / 45));
+  const branches = depth >= 8 ? 2 : rng.int(2, 3);
+  const branchAngle = rng.range(0.34, 0.6);
+  const rootLength = Math.min(width, height) * rng.range(0.16, 0.24);
+  const rootX = width / 2 + rng.range(-width * 0.08, width * 0.08);
+  const rootY = height * 0.94;
+  const grow = (x, y, angle, length, level) => {
+    if (strokes.length >= MAX) return;
+    const x2 = x + Math.cos(angle) * length;
+    const y2 = y + Math.sin(angle) * length;
+    strokes.push({
+      points: [{ x, y }, { x: x2, y: y2 }],
+      color: colors[Math.min(colors.length - 1, level) % colors.length],
+      width: lineWidth * (0.35 + (1 - level / depth) * 1.7),
+      alpha: 0.9,
+    });
+    if (level >= depth || length < 6) return;
+    const spread = branchAngle * rng.range(0.75, 1.25);
+    for (let b = 0; b < branches; b += 1) {
+      const direction = branches === 1 ? 0 : (b / (branches - 1)) * 2 - 1;
+      grow(x2, y2, angle + direction * spread + rng.range(-0.14, 0.14), length * rng.range(0.6, 0.78), level + 1);
+    }
+  };
+  grow(rootX, rootY, -Math.PI / 2 + rng.range(-0.16, 0.16), rootLength, 1);
+  return strokes;
+};
+
+const waveStrata = ({ rng, width, height, density, lineWidth, colors }) => {
+  const rows = Math.round(8 + (density / 100) * 34);
+  const rowHeight = height / rows;
+  const strokes = [];
+  for (let row = 0; row < rows; row += 1) {
+    const baseY = (row + 0.5) * rowHeight;
+    const amplitude = rowHeight * rng.range(0.25, 0.9);
+    const frequency = (rng.range(0.6, 3.4) * Math.PI * 2) / width;
+    const phase = rng.range(0, Math.PI * 2);
+    const drift = rng.range(-0.16, 0.16) * rowHeight;
+    const points = [];
+    for (let i = 0; i <= 220; i += 1) {
+      const t = i / 220;
+      points.push({ x: t * width, y: baseY + drift * t + Math.sin(t * width * frequency + phase) * amplitude });
+    }
+    const color = colors[rng.int(0, colors.length - 1)];
+    splitPoints(points, Math.ceil(points.length / rng.int(3, 9))).forEach((chunk) => {
+      strokes.push({ points: chunk, color, width: lineWidth * rng.range(0.8, 1.7), alpha: 0.85 });
+    });
+  }
+  return strokes;
+};
+
+const stipple = ({ rng, width, height, density, colors }) => {
+  const count = Math.round(240 + (density / 100) * 1400);
+  const cx = width / 2;
+  const cy = height / 2;
+  const maxRadius = Math.min(width, height) * 0.46;
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const offset = rng.range(0, Math.PI * 2);
+  const unit = Math.min(width, height);
+  const strokes = [];
+  for (let i = 0; i < count; i += 1) {
+    const t = (i + 0.5) / count;
+    const radius = maxRadius * Math.sqrt(t) * rng.range(0.94, 1.06);
+    const angle = i * goldenAngle + offset;
+    strokes.push({
+      points: [{ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius }],
+      color: colors[rng.int(0, colors.length - 1)],
+      width: 0,
+      radius: unit * rng.range(0.002, 0.007) * (0.6 + (1 - t) * 0.9),
+      alpha: 0.9,
+    });
+  }
+  return strokes;
+};
+
+const ALGORITHMS = [
+  { id: "flowField", label: "流場筆觸", icon: "wind", build: flowField },
+  { id: "harmonograph", label: "和諧振盪", icon: "wave", build: harmonograph },
+  { id: "mandala", label: "曼陀羅", icon: "flower", build: mandala },
+  { id: "fractalTree", label: "分形樹", icon: "sprout", build: fractalTree },
+  { id: "waveStrata", label: "波紋疊層", icon: "waves", build: waveStrata },
+  { id: "stipple", label: "點彩星群", icon: "sparkle", build: stipple },
+];
+const getAlgorithm = (id) => ALGORITHMS.find((a) => a.id === id) || ALGORITHMS[0];
+
+/* ---------- 引擎 ---------- */
+const ASPECTS = {
+  square: { width: 1000, height: 1000 },
+  portrait: { width: 1000, height: 1250 },
+  landscape: { width: 1600, height: 900 },
+  story: { width: 900, height: 1600 },
+};
+const ASPECT_LIST = [
+  { id: "square", label: "1:1" },
+  { id: "portrait", label: "4:5" },
+  { id: "landscape", label: "16:9" },
+  { id: "story", label: "9:16" },
+];
+const DEFAULT_SPEC = { algorithm: "flowField", seed: 20261019, palette: "aurora", background: "ink", density: 55, lineWidth: 1.6, aspect: "square" };
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const normalizeSpec = (spec) => ({
+  ...spec,
+  seed: Number.isFinite(spec.seed) ? Math.abs(Math.floor(spec.seed)) || 1 : DEFAULT_SPEC.seed,
+  density: clamp(Number.isFinite(spec.density) ? spec.density : DEFAULT_SPEC.density, 1, 100),
+  lineWidth: clamp(Number.isFinite(spec.lineWidth) ? spec.lineWidth : DEFAULT_SPEC.lineWidth, 0.4, 8),
+});
+const aspectRatio = (aspect) => {
+  const design = ASPECTS[aspect] || ASPECTS.square;
+  return design.width / design.height;
+};
+const pickRandom = (items) => items[Math.floor(Math.random() * items.length)];
+const randomSpec = (current) => normalizeSpec({
+  ...current,
+  algorithm: pickRandom(ALGORITHMS).id,
+  palette: pickRandom(PALETTES).id,
+  background: pickRandom(BACKGROUNDS).id,
+  seed: randomSeed(),
+  density: 25 + Math.round(Math.random() * 65),
+  lineWidth: Math.round((0.8 + Math.random() * 2.6) * 10) / 10,
+});
+
+/** 同一組 spec 永遠產生同一組筆觸，這是作品集能只存參數就能重現畫面的原因。 */
+const buildStrokes = (input) => {
+  const spec = normalizeSpec(input);
+  const design = ASPECTS[spec.aspect] || ASPECTS.square;
+  const palette = getPalette(spec.palette);
+  const background = getBackground(spec.background);
+  return getAlgorithm(spec.algorithm).build({
+    rng: createRng(spec.seed),
+    noise: createNoise2D(spec.seed),
+    width: design.width,
+    height: design.height,
+    density: spec.density,
+    lineWidth: spec.lineWidth,
+    colors: paletteColors(palette, background),
+  });
+};
+
+const paintBackground = (ctx, spec, width, height) => {
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = getBackground(spec.background).color;
+  ctx.fillRect(0, 0, width, height);
+};
+
+const drawStrokeRange = (ctx, strokes, from, to, scale) => {
+  const start = Math.min(Math.max(from, 0), strokes.length);
+  const limit = Math.min(Math.max(to, start), strokes.length);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let i = start; i < limit; i += 1) {
+    const stroke = strokes[i];
+    ctx.globalAlpha = stroke.alpha == null ? 1 : stroke.alpha;
+    if (stroke.radius) {
+      ctx.fillStyle = stroke.color;
+      ctx.beginPath();
+      ctx.arc(stroke.points[0].x * scale, stroke.points[0].y * scale, Math.max(0.4, stroke.radius * scale), 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    if (stroke.points.length < 2) continue;
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = Math.max(0.3, stroke.width * scale);
+    ctx.beginPath();
+    ctx.moveTo(stroke.points[0].x * scale, stroke.points[0].y * scale);
+    for (let p = 1; p < stroke.points.length; p += 1) {
+      ctx.lineTo(stroke.points[p].x * scale, stroke.points[p].y * scale);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+};
+
+/** 把一張作品畫到任意尺寸的畫布上 — 縮圖與 PNG 匯出共用同一條路徑。 */
+const renderArtwork = (canvas, input, options = {}) => {
+  const spec = normalizeSpec(input);
+  const design = ASPECTS[spec.aspect] || ASPECTS.square;
+  const longSide = Math.max(64, options.maxSize || Math.max(design.width, design.height));
+  const scale = longSide / Math.max(design.width, design.height);
+  const width = Math.max(1, Math.round(design.width * scale));
+  const height = Math.max(1, Math.round(design.height * scale));
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return 0;
+  paintBackground(ctx, spec, width, height);
+  const strokes = buildStrokes(spec);
+  drawStrokeRange(ctx, strokes, 0, strokes.length, width / design.width);
+  return strokes.length;
+};
+
+const exportArtworkPng = (spec, filename, maxSize = 2400) =>
+  new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    renderArtwork(canvas, spec, { maxSize });
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("canvas export failed"));
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      resolve();
+    }, "image/png");
+  });
+const artworkFilename = (spec) => `artwork-${spec.algorithm}-${spec.seed}.png`;
+
+/* =========================================================================
+   介面
+   ========================================================================= */
+const STAGE_LONG_SIDE = 1440;
+const $ = (id) => document.getElementById(id);
+
+/* 線條圖示（自行繪製，無外部依賴、無 emoji） */
+const ICONS = {
+  palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><circle cx="9.4" cy="9.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.8" cy="9.2" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.3" cy="14.2" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  sparkleWand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 12.5 11.5"/><path d="M17 3.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/><path d="M6.5 4.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4L4.5 6.5l1.4-.6z"/></svg>',
+  wind: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9.5a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 12h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 16h7"/></svg>',
+  wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c2.5-6 4.5-6 7 0s4.5 6 7 0 4-4.5 6-2"/></svg>',
+  flower: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.4"/><path d="M12 3.6a3.6 3.6 0 0 1 0 7.2 3.6 3.6 0 0 1 0-7.2z"/><path d="M20.4 12a3.6 3.6 0 0 1-7.2 0 3.6 3.6 0 0 1 7.2 0z"/><path d="M12 20.4a3.6 3.6 0 0 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/><path d="M3.6 12a3.6 3.6 0 0 1 7.2 0 3.6 3.6 0 0 1-7.2 0z"/></svg>',
+  sprout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21v-7"/><path d="M12 14c0-3.3-2.7-6-6-6 0 3.3 2.7 6 6 6z"/><path d="M12 14c0-3.3 2.7-6 6-6 0 3.3-2.7 6-6 6z"/></svg>',
+  waves: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7c2 0 3-1.5 5-1.5S10 7 12 7s3-1.5 5-1.5S20 7 22 7"/><path d="M2 12c2 0 3-1.5 5-1.5S10 12 12 12s3-1.5 5-1.5S20 12 22 12"/><path d="M2 17c2 0 3-1.5 5-1.5S10 17 12 17s3-1.5 5-1.5S20 17 22 17"/></svg>',
+  sparkle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z"/><path d="M18 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5.6a1 1 0 0 1 1.5-.87l8.2 5.4a1 1 0 0 1 0 1.74l-8.2 5.4A1 1 0 0 1 8 16.4z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="8" y="5.5" width="3" height="13" rx="1.2"/><rect x="13" y="5.5" width="3" height="13" rx="1.2"/></svg>',
+  replay: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4.5V9h4.5"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M5 19h14"/></svg>',
+  shuffle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3.5l8 10H20"/><path d="M4 17h3.5l2.2-2.7"/><path d="m15.6 6.4 2.9 2.6-2.9 2.6"/><path d="m15.6 12.4 2.9 2.6-2.9 2.6"/></svg>',
+  fullscreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4H4v5.5"/><path d="M14.5 4H20v5.5"/><path d="M14.5 20H20v-5.5"/><path d="M9.5 20H4v-5.5"/></svg>',
+  sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14"/><path d="M5 17h14"/><circle cx="9.5" cy="7" r="2.2" fill="hsl(var(--background))"/><circle cx="14.5" cy="17" r="2.2" fill="hsl(var(--background))"/></svg>',
+  images: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.6" cy="10.2" r="1.4"/><path d="m4.5 17.5 4.8-4.6 3.4 3.2 2.6-2.4 4.2 3.8"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15"/><path d="M9.5 7V4.8h5V7"/><path d="m6.5 7 1 12.2h9L17.5 7"/></svg>',
+  dice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="15" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.2" fill="currentColor" stroke="none"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.4 2.8 2.8L16 9.6"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.6v5.2"/><circle cx="12" cy="16.4" r="1" fill="currentColor" stroke="none"/></svg>',
+};
+for (const node of document.querySelectorAll("[data-icon]")) {
+  node.innerHTML = ICONS[node.dataset.icon] || "";
+}
+$("diceButton").innerHTML = ICONS.dice;
+$("generateButton").innerHTML = `${ICONS.sparkleWand}<span>生成新作</span>`;
+$("playButton").innerHTML = ICONS.pause;
+$("replayButton").innerHTML = ICONS.replay;
+$("downloadButton").innerHTML = `${ICONS.download}<span>下載 PNG</span>`;
+$("fullscreenButton").innerHTML = ICONS.fullscreen;
+$("backendNotice").innerHTML = `${ICONS.alert}<span>作品集暫時無法使用（需要網路）。繪圖功能完全不受影響。</span>`;
+
+/* ---------- 狀態 ---------- */
+const state = {
+  spec: { ...DEFAULT_SPEC },
+  speed: 260,
+  autoSave: true,
+  playing: true,
+  done: false,
+  drawn: 0,
+  strokes: [],
+};
+const canvas = $("stage");
+let frameHandle = null;
+let lastTime = 0;
+let reportedPercent = -1;
+let savedKey = null;
+let session = null;
+let supabase = null;
+let galleryRows = new Map();
+
+/* ---------- 繪製流程 ---------- */
+const restart = () => {
+  state.playing = true;
+  state.done = false;
+  state.drawn = 0;
+  resetArtwork();
+};
+
+const resetArtwork = () => {
+  const design = ASPECTS[state.spec.aspect] || ASPECTS.square;
+  const factor = STAGE_LONG_SIDE / Math.max(design.width, design.height);
+  canvas.width = Math.round(design.width * factor);
+  canvas.height = Math.round(design.height * factor);
+  const ctx = canvas.getContext("2d");
+  paintBackground(ctx, state.spec, canvas.width, canvas.height);
+  state.strokes = buildStrokes(state.spec);
+  state.drawn = 0;
+  state.done = false;
+  reportedPercent = -1;
+  updateStatus();
+  startLoop();
+};
+
+const startLoop = () => {
+  if (frameHandle !== null) cancelAnimationFrame(frameHandle);
+  frameHandle = null;
+  lastTime = 0;
+  if (!state.playing || state.done) return;
+  frameHandle = requestAnimationFrame(tick);
+};
+
+const tick = (time) => {
+  if (lastTime === 0) lastTime = time;
+  const delta = Math.min(0.25, Math.max(0, (time - lastTime) / 1000));
+  lastTime = time;
+
+  const ctx = canvas.getContext("2d");
+  const design = ASPECTS[state.spec.aspect] || ASPECTS.square;
+  const total = state.strokes.length;
+  const next = Math.min(total, state.drawn + Math.max(1, Math.round(state.speed * delta)));
+  drawStrokeRange(ctx, state.strokes, state.drawn, next, canvas.width / design.width);
+  state.drawn = next;
+
+  const percent = Math.round((next / total) * 100);
+  if (percent !== reportedPercent) {
+    reportedPercent = percent;
+    updateStatus();
+  }
+
+  if (next >= total) {
+    state.done = true;
+    updateStatus();
+    handleComplete();
+    return;
+  }
+  frameHandle = requestAnimationFrame(tick);
+};
+
+const updateStatus = () => {
+  const total = state.strokes.length;
+  const percent = total === 0 ? 0 : Math.round((state.drawn / total) * 100);
+  const label = state.done ? "繪製完成" : state.playing ? "繪製中" : state.drawn === 0 ? "待命中" : "已暫停";
+
+  $("statusLabel").textContent = label;
+  $("strokeCount").textContent = `${state.drawn} / ${total} 筆`;
+  $("percentText").textContent = `${percent}%`;
+  $("progressBar").style.width = `${percent}%`;
+
+  const dot = $("statusDot");
+  dot.classList.toggle("active", state.done || state.playing);
+  dot.classList.toggle("pulse", state.playing && !state.done);
+
+  $("playButton").innerHTML = state.playing ? ICONS.pause : ICONS.play;
+  $("playButton").setAttribute("aria-label", state.playing ? "暫停" : "播放");
+  $("downloadButton").disabled = !state.done;
+  $("seedChip").textContent = `種子 ${state.spec.seed}`;
+
+  const active = document.activeElement;
+  if (active !== $("seedInput")) $("seedInput").value = String(state.spec.seed);
+  $("densityInput").value = String(state.spec.density);
+  $("densityValue").textContent = String(Math.round(state.spec.density));
+  $("lineWidthInput").value = String(state.spec.lineWidth);
+  $("lineWidthValue").textContent = state.spec.lineWidth.toFixed(1);
+  $("speedInput").value = String(state.speed);
+  $("speedValue").textContent = `${Math.round(state.speed)} 筆/秒`;
+};
+
+const applySpec = (patch) => {
+  state.spec = normalizeSpec({ ...state.spec, ...patch });
+  syncControls();
+  restart();
+};
+
+/* ---------- 完成後自動保存 ---------- */
+const handleComplete = () => {
+  if (!state.autoSave || !session || !supabase) return;
+  const key = JSON.stringify(state.spec);
+  if (savedKey === key) return;
+  savedKey = key;
+  void saveArtwork();
+};
+
+const saveArtwork = async () => {
+  const spec = state.spec;
+  const { error } = await supabase.from("artworks").insert({
+    user_id: session.user.id,
+    algorithm: spec.algorithm,
+    seed: spec.seed,
+    palette: spec.palette,
+    params: { background: spec.background, density: spec.density, lineWidth: spec.lineWidth, aspect: spec.aspect },
+  });
+  if (error) {
+    savedKey = null;
+    toast("操作失敗，請稍後再試", "alert");
+    return;
+  }
+  toast("已存入作品集");
+  void loadGallery();
+};
+
+/* =========================================================================
+   控制項
+   ========================================================================= */
+const algorithmSeg = $("algorithmSeg");
+for (const algorithm of ALGORITHMS) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "seg-item";
+  button.dataset.algorithm = algorithm.id;
+  button.setAttribute("aria-pressed", "false");
+  button.innerHTML = `${ICONS[algorithm.icon] || ""}<span>${algorithm.label}</span>`;
+  button.addEventListener("click", () => applySpec({ algorithm: algorithm.id }));
+  algorithmSeg.appendChild(button);
+}
+
+const paletteGrid = $("paletteGrid");
+for (const palette of PALETTES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chip-btn";
+  button.dataset.palette = palette.id;
+  button.setAttribute("aria-pressed", "false");
+  const dots = swatchColors(palette).slice(0, 4).map((color) => `<span style="background-color:${color}"></span>`).join("");
+  button.innerHTML = `<span class="swatch-dots">${dots}</span>${palette.label}`;
+  button.addEventListener("click", () => applySpec({ palette: palette.id }));
+  paletteGrid.appendChild(button);
+}
+
+const backgroundRow = $("backgroundRow");
+for (const background of BACKGROUNDS) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chip-btn";
+  button.dataset.background = background.id;
+  button.setAttribute("aria-pressed", "false");
+  button.innerHTML = `<span class="dot" style="background-color:${background.color}"></span>${background.label}`;
+  button.addEventListener("click", () => applySpec({ background: background.id }));
+  backgroundRow.appendChild(button);
+}
+
+const aspectSeg = $("aspectSeg");
+for (const aspect of ASPECT_LIST) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "seg-item col";
+  button.dataset.aspect = aspect.id;
+  button.setAttribute("aria-pressed", "false");
+  button.innerHTML = `<span class="ratio-box" style="--r:${aspectRatio(aspect.id)}"></span><span>${aspect.label}</span>`;
+  button.addEventListener("click", () => applySpec({ aspect: aspect.id }));
+  aspectSeg.appendChild(button);
+}
+
+const syncControls = () => {
+  for (const button of algorithmSeg.children) {
+    const on = button.dataset.algorithm === state.spec.algorithm;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  for (const button of paletteGrid.children) {
+    const on = button.dataset.palette === state.spec.palette;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  for (const button of backgroundRow.children) {
+    const on = button.dataset.background === state.spec.background;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  for (const button of aspectSeg.children) {
+    const on = button.dataset.aspect === state.spec.aspect;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+  updateStatus();
+};
+
+$("densityInput").addEventListener("input", (event) => applySpec({ density: Number(event.target.value) }));
+$("lineWidthInput").addEventListener("input", (event) => applySpec({ lineWidth: Number(event.target.value) }));
+$("speedInput").addEventListener("input", (event) => {
+  state.speed = Number(event.target.value);
+  $("speedValue").textContent = `${Math.round(state.speed)} 筆/秒`;
+});
+
+const seedInput = $("seedInput");
+const commitSeed = () => {
+  const parsed = Number.parseInt(seedInput.value, 10);
+  if (Number.isFinite(parsed) && parsed > 0) applySpec({ seed: parsed });
+  else seedInput.value = String(state.spec.seed);
+};
+seedInput.addEventListener("blur", commitSeed);
+seedInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") seedInput.blur();
+});
+$("diceButton").addEventListener("click", () => applySpec({ seed: randomSeed() }));
+
+const autoSaveSwitch = $("autoSaveSwitch");
+autoSaveSwitch.addEventListener("click", () => {
+  state.autoSave = !state.autoSave;
+  autoSaveSwitch.setAttribute("aria-checked", String(state.autoSave));
+  if (state.autoSave && state.done) handleComplete();
+});
+
+/* ---------- 工具列 ---------- */
+$("generateButton").addEventListener("click", () => applySpec({ seed: randomSeed() }));
+$("replayButton").addEventListener("click", () => restart());
+$("playButton").addEventListener("click", () => {
+  if (state.done) {
+    restart();
+    return;
+  }
+  state.playing = !state.playing;
+  updateStatus();
+  startLoop();
+});
+$("surpriseButton").addEventListener("click", () => {
+  state.spec = randomSpec(state.spec);
+  syncControls();
+  restart();
+});
+$("downloadButton").addEventListener("click", () => {
+  exportArtworkPng(state.spec, artworkFilename(state.spec))
+    .then(() => toast("PNG 已開始下載"))
+    .catch(() => toast("操作失敗，請稍後再試", "alert"));
+});
+$("fullscreenButton").addEventListener("click", () => {
+  const element = $("stageWrap");
+  if (document.fullscreenElement) void document.exitFullscreen();
+  else void element.requestFullscreen?.();
+});
+
+/* ---------- 行動版設定抽屜 ---------- */
+const panelWrap = $("panelWrap");
+const scrim = $("scrim");
+const closeSheet = () => {
+  panelWrap.classList.remove("open");
+  scrim.classList.remove("open");
+};
+$("settingsButton").addEventListener("click", () => {
+  panelWrap.classList.toggle("open");
+  scrim.classList.toggle("open");
+});
+scrim.addEventListener("click", closeSheet);
+
+/* ---------- 提示與確認框 ---------- */
+const toast = (message, icon = "check") => {
+  const node = document.createElement("div");
+  node.className = "toast";
+  node.innerHTML = `${ICONS[icon] || ICONS.check}<span></span>`;
+  node.querySelector("span").textContent = message;
+  $("toasts").appendChild(node);
+  window.setTimeout(() => node.remove(), 2600);
+};
+
+const confirmDialog = $("confirmDialog");
+let confirmAction = null;
+const openConfirm = ({ title, body, okLabel, onConfirm }) => {
+  $("confirmTitle").textContent = title;
+  $("confirmBody").textContent = body;
+  $("confirmOk").textContent = okLabel;
+  confirmAction = onConfirm;
+  confirmDialog.showModal();
+};
+$("confirmCancel").addEventListener("click", () => {
+  confirmAction = null;
+  confirmDialog.close();
+});
+$("confirmOk").addEventListener("click", () => {
+  const action = confirmAction;
+  confirmAction = null;
+  confirmDialog.close();
+  if (action) void action();
+});
+
+/* =========================================================================
+   作品集（Enter Cloud：匿名身分 + RLS 隔離）
+   ========================================================================= */
+const CLOUD_URL = "https://spb-t4na62v40g4a0aej.supabase.opentrust.net";
+const CLOUD_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi10NG5hNjJ2NDBnNGEwYWVqIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3OTI0MTk5OTIsImV4cCI6MjEwNzk5NTk5Mn0.G8Qf7lWUU9qcwX3KEEe1pPO2_7qYqm9AhLyG8D8r0ZM";
+
+const rowToSpec = (row) => {
+  const params = row.params || {};
+  return normalizeSpec({
+    algorithm: row.algorithm || DEFAULT_SPEC.algorithm,
+    seed: typeof row.seed === "number" ? row.seed : DEFAULT_SPEC.seed,
+    palette: row.palette || DEFAULT_SPEC.palette,
+    background: typeof params.background === "string" ? params.background : DEFAULT_SPEC.background,
+    density: typeof params.density === "number" ? params.density : DEFAULT_SPEC.density,
+    lineWidth: typeof params.lineWidth === "number" ? params.lineWidth : DEFAULT_SPEC.lineWidth,
+    aspect: typeof params.aspect === "string" ? params.aspect : DEFAULT_SPEC.aspect,
+  });
+};
+
+const loadGallery = async () => {
+  if (!supabase || !session) return;
+  const { data, error } = await supabase
+    .from("artworks")
+    .select("id, algorithm, seed, palette, params, created_at")
+    .order("created_at", { ascending: false })
+    .limit(60);
+  if (error) {
+    toast("作品集載入失敗，請重新整理再試", "alert");
+    return;
+  }
+  renderGallery(data || []);
+};
+
+const renderGallery = (rows) => {
+  const strip = $("galleryStrip");
+  strip.innerHTML = "";
+  galleryRows = new Map(rows.map((row) => [row.id, rowToSpec(row)]));
+
+  $("galleryCount").textContent = `共 ${rows.length} 件`;
+  $("galleryEmpty").hidden = rows.length > 0;
+  strip.hidden = rows.length === 0;
+  $("clearButton").hidden = rows.length === 0;
+
+  for (const row of rows) {
+    const spec = galleryRows.get(row.id);
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "thumb-open";
+    open.setAttribute("aria-label", "載回畫布");
+    open.style.aspectRatio = String(aspectRatio(spec.aspect));
+    const thumbCanvas = document.createElement("canvas");
+    open.appendChild(thumbCanvas);
+    open.addEventListener("click", () => loadFromGallery(spec));
+
+    const actions = document.createElement("div");
+    actions.className = "thumb-actions";
+    actions.appendChild(iconButton("replay", "載回畫布", () => loadFromGallery(spec)));
+    const right = document.createElement("span");
+    right.style.display = "flex";
+    right.style.gap = "4px";
+    right.appendChild(iconButton("download", "下載 PNG", () => downloadFromGallery(spec)));
+    right.appendChild(iconButton("trash", "刪除", () => deleteFromGallery(row.id), true));
+    actions.appendChild(right);
+
+    thumb.append(open, actions);
+    strip.appendChild(thumb);
+    // 縮圖由參數即時重繪，畫得跟資料庫裡的完全一樣。
+    renderArtwork(thumbCanvas, spec, { maxSize: 288 });
+  }
+};
+
+const iconButton = (icon, label, onClick, danger = false) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = danger ? "icon-btn danger" : "icon-btn";
+  button.setAttribute("aria-label", label);
+  button.innerHTML = ICONS[icon];
+  button.addEventListener("click", onClick);
+  return button;
+};
+
+const loadFromGallery = (spec) => {
+  state.spec = { ...spec };
+  syncControls();
+  restart();
+  closeSheet();
+  toast("已載回畫布");
+};
+
+const downloadFromGallery = (spec) => {
+  exportArtworkPng(spec, artworkFilename(spec))
+    .then(() => toast("PNG 已開始下載"))
+    .catch(() => toast("操作失敗，請稍後再試", "alert"));
+};
+
+const deleteFromGallery = (id) => {
+  openConfirm({
+    title: "刪除這件作品？",
+    body: "刪除後無法復原。",
+    okLabel: "確定刪除",
+    onConfirm: async () => {
+      const { error } = await supabase.from("artworks").delete().eq("id", id);
+      if (error) {
+        toast("操作失敗，請稍後再試", "alert");
+        return;
+      }
+      toast("已刪除作品");
+      void loadGallery();
+    },
+  });
+};
+
+$("clearButton").addEventListener("click", () => {
+  openConfirm({
+    title: "清空作品集？",
+    body: "作品集內所有作品都會被永久刪除，無法復原。",
+    okLabel: "清空作品集",
+    onConfirm: async () => {
+      const { error } = await supabase.from("artworks").delete().eq("user_id", session.user.id);
+      if (error) {
+        toast("操作失敗，請稍後再試", "alert");
+        return;
+      }
+      toast("作品集已清空");
+      void loadGallery();
+    },
+  });
+});
+
+/* 啟動順序：先讓畫布開始作畫，再處理需要網路的作品集。 */
+const initBackend = async () => {
+  try {
+    const mod = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+    const client = mod.createClient(CLOUD_URL, CLOUD_KEY, {
+      auth: { storage: window.localStorage, persistSession: true, autoRefreshToken: true },
+    });
+
+    client.auth.onAuthStateChange((_event, nextSession) => {
+      session = nextSession;
+      if (nextSession && nextSession.user) void loadGallery();
+    });
+
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+
+    if (data.session && data.session.user) {
+      session = data.session;
+    } else {
+      const { data: anonymous, error: anonymousError } = await client.auth.signInAnonymously();
+      if (anonymousError || !anonymous.user) throw anonymousError || new Error("anonymous sign-in failed");
+      session = anonymous.session;
+    }
+
+    supabase = client;
+    await loadGallery();
+    // 首次載入時若作品早已畫完，補做一次自動保存。
+    if (state.done) handleComplete();
+  } catch (error) {
+    console.warn("[studio] 作品集無法使用：", error);
+    supabase = null;
+    session = null;
+    $("backendNotice").hidden = false;
+    renderGallery([]);
+  }
+};
+
+/* ---------- 啟動 ---------- */
+syncControls();
+resetArtwork();
+void initBackend();
+</script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"52db314843ed41bab1382e49ddd4ff6f","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>
